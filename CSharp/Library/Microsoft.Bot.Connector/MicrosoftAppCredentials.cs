@@ -1,22 +1,29 @@
-﻿using Microsoft.Rest;
-using Newtonsoft.Json;
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Diagnostics;
-using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
+using Microsoft.Rest;
+using Newtonsoft.Json;
 
 namespace Microsoft.Bot.Connector
 {
     public class MicrosoftAppCredentials : ServiceClientCredentials
     {
+        /// <summary>
+        /// The key for Microsoft app Id.
+        /// </summary>
+        public const string MicrosoftAppIdKey = "MicrosoftAppId";
+
+        /// <summary>
+        /// The key for Microsoft app Password.
+        /// </summary>
+        public const string MicrosoftAppPasswordKey = "MicrosoftAppPassword";
+
         protected static ConcurrentDictionary<string, DateTime> TrustedHostNames = new ConcurrentDictionary<string, DateTime>(
                                                                                         new Dictionary<string, DateTime>() {
                                                                                             { "state.botframework.com", DateTime.MaxValue }
@@ -24,18 +31,16 @@ namespace Microsoft.Bot.Connector
 
         public MicrosoftAppCredentials(string appId = null, string password = null)
         {
-            MicrosoftAppId = appId ?? ConfigurationManager.AppSettings["MicrosoftAppId"];
-            MicrosoftAppPassword = password ?? ConfigurationManager.AppSettings["MicrosoftAppPassword"];
+            MicrosoftAppId = appId ?? ConfigurationManager.AppSettings[MicrosoftAppIdKey] ?? Environment.GetEnvironmentVariable(MicrosoftAppIdKey, EnvironmentVariableTarget.Process);
+            MicrosoftAppPassword = password ?? ConfigurationManager.AppSettings[MicrosoftAppPasswordKey] ?? Environment.GetEnvironmentVariable(MicrosoftAppPasswordKey, EnvironmentVariableTarget.Process);
             TokenCacheKey = $"{MicrosoftAppId}-cache";
         }
 
         public string MicrosoftAppId { get; set; }
-        public string MicrosoftAppIdSettingName { get; set; }
         public string MicrosoftAppPassword { get; set; }
-        public string MicrosoftAppPasswordSettingName { get; set; }
 
-        public virtual string OAuthEndpoint { get { return "https://login.microsoftonline.com/common/oauth2/v2.0/token"; } }
-        public virtual string OAuthScope { get { return "https://graph.microsoft.com/.default"; } }
+        public virtual string OAuthEndpoint { get { return JwtConfig.ToChannelFromBotLoginUrl; } }
+        public virtual string OAuthScope { get { return JwtConfig.ToChannelFromBotOAuthScope; } }
 
         protected readonly string TokenCacheKey;
 
@@ -116,28 +121,9 @@ namespace Microsoft.Bot.Connector
 
         private bool ShouldSetToken(HttpRequestMessage request)
         {
-            // There is no current http context, proactive message
-            // assuming that developer is not calling drop context
-            if (HttpContext.Current == null || TrustedUri(request.RequestUri))
+            if (TrustedUri(request.RequestUri))
             {
                 return true;
-            }
-            else if (HttpContext.Current.User != null)
-            {
-                // This check is redundant now because RequestUri should already be in the 
-                // trusted uri list added by BotAuthentication attribute
-                ClaimsIdentity identity = (ClaimsIdentity)HttpContext.Current.User.Identity;
-
-                if (identity?.Claims.FirstOrDefault(c => c.Type == "appid" && JwtConfig.GetToBotFromChannelTokenValidationParameters(MicrosoftAppId).ValidIssuers.Contains(c.Issuer)) != null)
-                    return true;
-
-                // Fallback for BF-issued tokens
-                if (identity?.Claims.FirstOrDefault(c => c.Issuer == "https://api.botframework.com" && c.Type == "aud") != null)
-                    return true;
-
-                // For emulator, we fallback to MSA as valid issuer
-                if (identity?.Claims.FirstOrDefault(c => c.Type == "appid" && JwtConfig.ToBotFromMSATokenValidationParameters.ValidIssuers.Contains(c.Issuer)) != null)
-                    return true;
             }
 
             Trace.TraceWarning($"Service url {request.RequestUri.Authority} is not trusted and JwtToken cannot be sent to it.");
@@ -160,9 +146,6 @@ namespace Microsoft.Bot.Connector
 
         private async Task<OAuthResponse> RefreshTokenAsync()
         {
-            MicrosoftAppId = MicrosoftAppId ?? ConfigurationManager.AppSettings[MicrosoftAppIdSettingName ?? "MicrosoftAppId"];
-            MicrosoftAppPassword = MicrosoftAppPassword ?? ConfigurationManager.AppSettings[MicrosoftAppPasswordSettingName ?? "MicrosoftAppPassword"];
-
             OAuthResponse oauthResponse;
 
             using (HttpClient httpClient = new HttpClient())

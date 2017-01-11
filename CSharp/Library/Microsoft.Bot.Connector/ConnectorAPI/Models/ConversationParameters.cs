@@ -11,6 +11,9 @@ namespace Microsoft.Bot.Connector
     using Microsoft.Rest;
     using Microsoft.Rest.Serialization;
 
+    /// <summary>
+    /// Parameters for creating a new conversation
+    /// </summary>
     public partial class ConversationParameters
     {
         /// <summary>
@@ -21,12 +24,14 @@ namespace Microsoft.Bot.Connector
         /// <summary>
         /// Initializes a new instance of the ConversationParameters class.
         /// </summary>
-        public ConversationParameters(ChannelAccount bot = default(ChannelAccount), bool? isGroup = default(bool?), IList<ChannelAccount> members = default(IList<ChannelAccount>), string topicName = default(string))
+        public ConversationParameters(bool? isGroup = default(bool?), ChannelAccount bot = default(ChannelAccount), IList<ChannelAccount> members = default(IList<ChannelAccount>), string topicName = default(string), Activity activity = default(Activity), object channelData = default(object))
         {
+            IsGroup = isGroup;
             Bot = bot;
-            IsGroup = isGroup;            
             Members = members;
             TopicName = topicName;
+            Activity = activity;
+            ChannelData = channelData;
         }
 
         /// <summary>
@@ -52,6 +57,19 @@ namespace Microsoft.Bot.Connector
         /// </summary>
         [JsonProperty(PropertyName = "topicName")]
         public string TopicName { get; set; }
+
+        /// <summary>
+        /// (Optional) When creating a new conversation, use this activity as
+        /// the intial message to the conversation
+        /// </summary>
+        [JsonProperty(PropertyName = "activity")]
+        public Activity Activity { get; set; }
+
+        /// <summary>
+        /// Channel specific payload
+        /// </summary>
+        [JsonProperty(PropertyName = "channelData")]
+        public object ChannelData { get; set; }
 
     }
 }

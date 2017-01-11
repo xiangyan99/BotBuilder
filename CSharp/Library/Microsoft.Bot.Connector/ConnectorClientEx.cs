@@ -1,6 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Reflection;
+
+using Microsoft.Rest;
 
 namespace Microsoft.Bot.Connector
 {
@@ -35,7 +40,28 @@ namespace Microsoft.Bot.Connector
         {
             var handlers = new List<DelegatingHandler>(srcHandlers);
             handlers.Add(new JwtTokenRefresher(credentials));
-            return handlers.ToArray(); 
+            return handlers.ToArray();
+        }
+
+        // client defaults to sending the expect: continue header, which isn't very efficient, 
+        partial void CustomInitialize()
+        {
+            AddUserAgent(this);
+            var servicePoint = ServicePointManager.FindServicePoint(this.BaseUri);
+            servicePoint.Expect100Continue = false;
+        }
+
+        internal static void AddUserAgent<T>(T client) where T : ServiceClient<T>
+        {
+            client.HttpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Microsoft-BotFramework", "3.1"));
+            client.HttpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue($"(BotBuilder .Net/{GetClientVersion(client)})"));
+        }
+
+        internal static string GetClientVersion<T>(T client) where T : ServiceClient<T>
+        {
+            var type = client.GetType();
+            var assembly = type.GetTypeInfo().Assembly;
+            return assembly.GetName().Version.ToString();
         }
     }
 }

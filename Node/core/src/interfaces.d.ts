@@ -95,6 +95,37 @@ interface IThumbnailCard extends IKeyboard {
     tap: ICardAction;               // This action will be activated when user taps on the section bubble. 
 }
 
+interface IMediaCard extends IKeyboard{
+    title: string;                  // Title of the Card 
+    subtitle: string;               // Subtitle appears just below Title field, differs from Title in font styling only 
+    text: string;                   // Text field appears just below subtitle, differs from Subtitle in font styling only 
+    image: ICardImage;              // Messaging supports all media formats: audio, video, images and thumbnails as well to optimize content download.
+    media: ICardMediaUrl[];         // Media source for video, audio or animations
+    autoloop: boolean;              // Should the media source reproduction run in a lool
+    autostart: boolean;             // Should the media start automatically
+    shareable: boolean;             // Should media be shareable
+    buttons: ICardAction[];         // Set of actions applicable to the current card.
+}
+
+interface IVideoCard extends IMediaCard {
+    aspect: string;                 //Hint of the aspect ratio of the video or animation. (16:9)(4:3)
+}
+
+interface IAnimationCard extends IMediaCard {
+}
+
+interface IAudioCard extends IMediaCard {
+}
+
+interface IIsCardMedia{
+    toMedia(): ICardMediaUrl;      //Returns the media to serialize
+}
+
+interface ICardMediaUrl {
+    url: string,                    // Url to audio, video or animation media
+    profile: string                 // Optional profile hint to the client to differentiate multiple MediaUrl objects from each other
+}
+
 interface IReceiptCard {
     title: string;                  // Title of the Card 
     items: IReceiptItem[];          // Array of receipt items.
@@ -163,37 +194,16 @@ interface ILocationV2 {
 }
 
 interface ILocalizer {
-    initialize(localizerSettings?: ILocalizerSettings): void;
-    load(locale: string, callback: ErrorCallback): void;     
+    load(locale: string, callback?: ErrorCallback): void;     
     defaultLocale(locale?: string): string   
     gettext(locale: string, msgid: string, namespace?: string): string;
     trygettext(locale: string, msgid: string, namespace?: string): string;
     ngettext(locale: string, msgid: string, msgid_plural: string, count: number, namespace?: string): string;
 }
 
-interface ILocalizerSettings {
+interface IDefaultLocalizerSettings {
     botLocalePath?: string;
     defaultLocale?: string;
-}
-
-interface ISession {
-    sessionState: ISessionState;
-    message: IMessage;
-    userData: any;
-    dialogData: any;
-    localizer?: ILocalizer;
-    error(err: Error): ISession;
-    gettext(msgid: string, ...args: any[]): string;
-    ngettext(msgid: string, msgid_plural: string, count: number): string;
-    send(message: string, ...args: any[]): ISession;
-    send(msg: IMessage): ISession;
-    getMessageReceived(): any;
-    messageSent(): boolean;
-    beginDialog<T>(id: string, args?: T): ISession;
-    replaceDialog<T>(id: string, args?: T): ISession;
-    endDialog(result?: any): ISession;
-    reset(id: string): ISession;
-    isReset(): boolean;
 }
 
 interface ISessionState {
@@ -205,14 +215,6 @@ interface ISessionState {
 interface IDialogState {
     id: string;
     state: any;
-}
-
-interface IBeginDialogHandler {
-    (session: ISession, args: any, next: (handled: boolean) => void): void; 
-}
-
-interface IDialogHandler<T> {
-    (session: ISession, args?: T): void;
 }
 
 interface IIntent {

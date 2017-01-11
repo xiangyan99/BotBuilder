@@ -143,7 +143,8 @@ namespace Microsoft.Bot.Builder.Tests
         protected override IBotData MakeBotData()
         {
             var msg = DialogTestBase.MakeTestMessage();
-            return new JObjectBotData(new BotIdResolver(msg.Recipient.Id), msg, new CachingBotDataStore(new InMemoryDataStore(), CachingBotDataStoreConsistencyPolicy.ETagBasedConsistency));
+
+            return new JObjectBotData(Address.FromActivity(msg), new CachingBotDataStore(new InMemoryDataStore(), CachingBotDataStoreConsistencyPolicy.ETagBasedConsistency));
         }
     }
 
@@ -153,21 +154,24 @@ namespace Microsoft.Bot.Builder.Tests
         protected override IBotData MakeBotData()
         {
             var msg = DialogTestBase.MakeTestMessage();
-            return new DictionaryBotData(new BotIdResolver(msg.Recipient.Id), msg, new CachingBotDataStore(new InMemoryDataStore(), CachingBotDataStoreConsistencyPolicy.ETagBasedConsistency));
+            return new DictionaryBotData(Address.FromActivity(msg), new CachingBotDataStore(new InMemoryDataStore(), CachingBotDataStoreConsistencyPolicy.ETagBasedConsistency));
         }
     }
 
     [TestClass]
     public sealed class BotDataTest_Consistency : DialogTestBase
     {
+        static IConnectorClientFactory connectorFactory;
+
         IDialog<object> chain = Chain.PostToChain().ContinueWith<IMessageActivity, string>(async (context, result) =>
         {
             var res = (Activity)await result;
             int t = 0;
             // saving a conflicting data by directly calling the state client
-            var data = await mockConnectorFactory.StateClient.BotState.GetPrivateConversationDataAsync(res.ChannelId, res.Conversation.Id, res.From.Id);
+            var stateClient = connectorFactory.MakeStateClient();
+            var data = await stateClient.BotState.GetPrivateConversationDataAsync(res.ChannelId, res.Conversation.Id, res.From.Id);
             data.SetProperty("mycount", 10);
-            await mockConnectorFactory.StateClient.BotState.SetPrivateConversationDataAsync(res.ChannelId, res.Conversation.Id, res.From.Id, data);
+            await stateClient.BotState.SetPrivateConversationDataAsync(res.ChannelId, res.Conversation.Id, res.From.Id, data);
 
             // save some data using context
             context.PrivateConversationData.TryGetValue("count", out t);
@@ -177,7 +181,7 @@ namespace Microsoft.Bot.Builder.Tests
 
         [TestMethod]
         public async Task EnforceETagConsistency()
-        {   
+        {
             Func<IDialog<object>> MakeRoot = () => chain;
 
             using (new FiberTestBase.ResolveMoqAssembly(chain))
@@ -187,19 +191,23 @@ namespace Microsoft.Bot.Builder.Tests
                 msg.Text = "test";
                 using (var scope = DialogModule.BeginLifetimeScope(container, msg))
                 {
+                    connectorFactory = scope.Resolve<IConnectorClientFactory>();
+
                     scope.Resolve<Func<IDialog<object>>>(TypedParameter.From(MakeRoot));
                     try
                     {
                         await Conversation.SendAsync(scope, msg);
                         Assert.Fail();
                     }
-                    catch(HttpOperationException e)
+                    catch (HttpOperationException e)
                     {
                         Assert.AreEqual(e.Response.StatusCode, HttpStatusCode.PreconditionFailed);
-                        var data = await mockConnectorFactory.StateClient.BotState.GetPrivateConversationDataAsync(msg.ChannelId, msg.Conversation.Id, msg.From.Id);
+                        var connectorFactory = scope.Resolve<IConnectorClientFactory>();
+                        var stateClient = connectorFactory.MakeStateClient();
+                        var data = await stateClient.BotState.GetPrivateConversationDataAsync(msg.ChannelId, msg.Conversation.Id, msg.From.Id);
                         Assert.AreEqual(10, data.GetProperty<int>("mycount"));
                     }
-                    catch(Exception)
+                    catch (Exception)
                     {
                         Assert.Fail();
                     }
@@ -219,12 +227,15 @@ namespace Microsoft.Bot.Builder.Tests
                 msg.Text = "test";
                 using (var scope = DialogModule.BeginLifetimeScope(container, msg))
                 {
+                    connectorFactory = scope.Resolve<IConnectorClientFactory>();
+
                     scope.Resolve<Func<IDialog<object>>>(TypedParameter.From(MakeRoot));
                     await Conversation.SendAsync(scope, msg);
                     var reply = scope.Resolve<Queue<IMessageActivity>>().Dequeue();
                     Assert.AreEqual("1:test", reply.Text);
-                    var data = await mockConnectorFactory.StateClient.BotState.GetPrivateConversationDataAsync(msg.ChannelId, msg.Conversation.Id, msg.From.Id);
-                    Assert.AreEqual(1, data.GetProperty<int>("count")); 
+                    var stateClient = connectorFactory.MakeStateClient();
+                    var data = await stateClient.BotState.GetPrivateConversationDataAsync(msg.ChannelId, msg.Conversation.Id, msg.From.Id);
+                    Assert.AreEqual(1, data.GetProperty<int>("count"));
                     Assert.AreEqual(0, data.GetProperty<int>("mycount")); // The overwritten data should be 0
                 }
             }

@@ -62,7 +62,10 @@ export var Data = {
 export var DialogId = {
     Prompts: 'BotBuilder:Prompts',
     FirstRun: 'BotBuilder:FirstRun',
-    Field: 'BotBuilder:Field'
+    ConfirmCancel: 'BotBuilder:ConfirmCancel',
+    ConfirmInterruption: 'BotBuilder:ConfirmInterruption',
+    Interruption: 'BotBuilder:Interruption',
+    Disambiguate: 'BotBuilder:Disambiguate'
 };
 
 export var Id = {

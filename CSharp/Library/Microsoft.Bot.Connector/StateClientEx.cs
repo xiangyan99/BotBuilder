@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Security.Claims;
+using System.Threading;
+using System.Web;
 
 namespace Microsoft.Bot.Connector
 {
@@ -26,9 +29,41 @@ namespace Microsoft.Bot.Connector
         /// <param name="addJwtTokenRefresher">True, if JwtTokenRefresher should be included; False otherwise.</param>
         /// <param name="handlers">Optional. The delegating handlers to add to the http client pipeline.</param>
         public StateClient(Uri baseUri, MicrosoftAppCredentials credentials, bool addJwtTokenRefresher = true, params DelegatingHandler[] handlers)
-            : this(baseUri, addJwtTokenRefresher? AddJwtTokenRefresher(handlers, credentials) : handlers)
+            : this(baseUri, addJwtTokenRefresher ? AddJwtTokenRefresher(handlers, credentials) : handlers)
         {
             this.Credentials = credentials;
+        }
+
+        /// <summary>
+        /// Create a new instance of the StateClient class using Credential source
+        /// </summary>
+        /// <param name="baseUri">Base URI for the State service</param>
+        /// <param name="credentialProvider">Credential source to use</param>
+        /// <param name="claimsIdentity">ClaimsIDentity to create the client for</param>
+        /// <param name="handlers">Optional. The delegating handlers to add to the http client pipeline.</param>
+        public StateClient(Uri baseUri, ICredentialProvider credentialProvider, ClaimsIdentity claimsIdentity = null, params DelegatingHandler[] handlers)
+            : this(baseUri, handlers: handlers)
+        {
+            if (claimsIdentity == null)
+                claimsIdentity = HttpContext.Current.User.Identity as ClaimsIdentity ?? Thread.CurrentPrincipal.Identity as ClaimsIdentity;
+
+            if (claimsIdentity == null)
+                throw new ArgumentNullException("ClaimsIdentity not passed in and not available via Thread.CurrentPrincipal.Identity");
+
+            var appId = claimsIdentity.GetAppIdFromClaims();
+            var password = credentialProvider.GetAppPasswordAsync(appId).Result;
+            this.Credentials = new MicrosoftAppCredentials(appId, password);
+        }
+
+        /// <summary>
+        /// Create a new instance of the StateClient class using Credential source
+        /// </summary>
+        /// <param name="credentialProvider">Credential source to use</param>
+        /// <param name="claimsIdentity">ClaimsIDentity to create the client for</param>
+        /// <param name="handlers">Optional. The delegating handlers to add to the http client pipeline.</param>
+        public StateClient(ICredentialProvider credentialProvider, ClaimsIdentity claimsIdentity = null, params DelegatingHandler[] handlers)
+            : this(null, credentialProvider, claimsIdentity, handlers: handlers)
+        {
         }
 
         /// <summary>
@@ -39,7 +74,7 @@ namespace Microsoft.Bot.Connector
         /// <param name="addJwtTokenRefresher">True, if JwtTokenRefresher should be included; False otherwise.</param>
         /// <param name="handlers">Optional. The delegating handlers to add to the http client pipeline.</param>
         public StateClient(MicrosoftAppCredentials credentials, bool addJwtTokenRefresher = true, params DelegatingHandler[] handlers)
-            :this(addJwtTokenRefresher ? AddJwtTokenRefresher(handlers, credentials) : handlers)
+            : this(addJwtTokenRefresher ? AddJwtTokenRefresher(handlers, credentials) : handlers)
         {
             this.Credentials = credentials;
         }
@@ -49,6 +84,11 @@ namespace Microsoft.Bot.Connector
             var handlers = new List<DelegatingHandler>(srcHandlers);
             handlers.Add(new JwtTokenRefresher(credentials));
             return handlers.ToArray();
+        }
+
+        partial void CustomInitialize()
+        {
+            ConnectorClient.AddUserAgent(this);
         }
     }
 }

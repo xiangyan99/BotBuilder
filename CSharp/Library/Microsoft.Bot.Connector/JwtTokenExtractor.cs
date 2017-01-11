@@ -3,11 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IdentityModel.Tokens;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
 using System.Security.Claims;
 using System.Threading.Tasks;
-using System.Web.Http.Controllers;
 using Microsoft.IdentityModel.Protocols;
 
 namespace Microsoft.Bot.Connector
@@ -34,14 +32,12 @@ namespace Microsoft.Bot.Connector
         {
             // Make our own copy so we can edit it
             _tokenValidationParameters = tokenValidationParameters.Clone();
+            _tokenValidationParameters.RequireSignedTokens = true;
 
             if (!_openIdMetadataCache.ContainsKey(metadataUrl))
                 _openIdMetadataCache[metadataUrl] = new ConfigurationManager<OpenIdConnectConfiguration>(metadataUrl);
 
             _openIdMetadata = _openIdMetadataCache[metadataUrl];
-
-            _tokenValidationParameters.ValidateAudience = true;
-            _tokenValidationParameters.RequireSignedTokens = true;
         }
 
         public async Task<ClaimsIdentity> GetIdentityAsync(HttpRequestMessage request)
@@ -64,8 +60,8 @@ namespace Microsoft.Bot.Connector
 
         public async Task<ClaimsIdentity> GetIdentityAsync(string scheme, string parameter)
         {
-            // No header in correct scheme?
-            if (scheme != "Bearer")
+            // No header in correct scheme or no token
+            if (scheme != "Bearer" || string.IsNullOrEmpty(parameter))
                 return null;
 
             // Issuer isn't allowed? No need to check signature
@@ -84,14 +80,6 @@ namespace Microsoft.Bot.Connector
             }
         }
 
-        public void GenerateUnauthorizedResponse(HttpActionContext actionContext)
-        {
-            string host = actionContext.Request.RequestUri.DnsSafeHost;
-            actionContext.Response = actionContext.Request.CreateResponse(HttpStatusCode.Unauthorized);
-            actionContext.Response.Headers.Add("WWW-Authenticate", string.Format("Bearer realm=\"{0}\"", host));
-            return;
-        }
-
         private bool HasAllowedIssuer(string jwtToken)
         {
             JwtSecurityToken token = new JwtSecurityToken(jwtToken);
@@ -104,19 +92,33 @@ namespace Microsoft.Bot.Connector
             return false;
         }
 
-        public string GetBotIdFromClaimsIdentity(ClaimsIdentity identity)
+
+
+        public string GetAppIdFromClaimsIdentity(ClaimsIdentity identity)
         {
             if (identity == null)
                 return null;
 
-            Claim botClaim = identity.Claims.FirstOrDefault(c => _tokenValidationParameters.ValidIssuers.Contains(c.Issuer) && c.Type == "appid");
-            if (botClaim != null)
-                return botClaim.Value;
+            Claim botClaim = identity.Claims.FirstOrDefault(c => _tokenValidationParameters.ValidIssuers.Contains(c.Issuer) && c.Type == "aud");
+            return botClaim?.Value;
+        }
 
-            // Fallback for BF-issued tokens
-            botClaim = identity.Claims.FirstOrDefault(c => c.Issuer == "https://api.botframework.com" && c.Type == "aud");
-            if (botClaim != null)
-                return botClaim.Value;
+        public string GetAppIdFromEmulatorClaimsIdentity(ClaimsIdentity identity)
+        {
+            if (identity == null)
+                return null;
+
+            Claim appIdClaim = identity.Claims.FirstOrDefault(c => _tokenValidationParameters.ValidIssuers.Contains(c.Issuer) && c.Type == "appid");
+            if (appIdClaim == null)
+                return null;
+
+            // v3.1 emulator token
+            if (identity.Claims.Any(c => c.Type == "aud" && c.Value == appIdClaim.Value))
+                return appIdClaim.Value;
+
+            // v3.0 emulator token -- allow this
+            if (identity.Claims.Any(c => c.Type == "aud" && c.Value == "https://graph.microsoft.com"))
+                return appIdClaim.Value;
 
             return null;
         }

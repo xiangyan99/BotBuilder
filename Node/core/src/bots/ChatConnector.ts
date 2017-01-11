@@ -31,21 +31,26 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-import ub = require('./UniversalBot');
-import bs = require('../storage/BotStorage');
-import events = require('events');
-import request = require('request');
-import async = require('async');
-import url = require('url');
-import http = require('http');
-import utils = require('../utils');
-import logger = require('../logger');
-import jwt = require('jsonwebtoken');
-import oid = require('./OpenIdMetadata');
-import zlib = require('zlib');
-import consts = require('../consts');
+import { IConnector } from './UniversalBot';
+import { IBotStorage, IBotStorageContext, IBotStorageData } from '../storage/BotStorage';
+import { OpenIdMetadata } from './OpenIdMetadata';
+import * as utils from '../utils';
+import * as logger from '../logger';
+import * as consts from '../consts';
+import * as events from 'events';
+import * as request from 'request';
+import * as async from 'async';
+import * as url from 'url';
+import * as http from 'http';
+import * as jwt from 'jsonwebtoken';
+import * as zlib from 'zlib';
+import urlJoin = require('url-join');
+
+var pjson = require('../../package.json');
 
 var MAX_DATA_LENGTH = 65000;
+
+var USER_AGENT = "Microsoft-BotFramework/3.1 (BotBuilder Node.js/"+ pjson.version +")";
 
 export interface IChatConnectorSettings {
     appId?: string;
@@ -65,6 +70,9 @@ export interface IChatConnectorEndpoint {
     msaOpenIdMetadata: string;
     msaIssuer: string;
     msaAudience: string;
+    emulatorOpenIdMetadata: string;
+    emulatorIssuer: string;
+    emulatorAudience: string;
     stateEndpoint: string;
 }
 
@@ -74,30 +82,35 @@ export interface IChatConnectorAddress extends IAddress {
     useAuth?: string;
 }
 
-export class ChatConnector implements ub.IConnector, bs.IBotStorage {
+export class ChatConnector implements IConnector, IBotStorage {
     private handler: (events: IEvent[], cb?: (err: Error) => void) => void;
     private accessToken: string;
     private accessTokenExpires: number;
-    private botConnectorOpenIdMetadata: oid.OpenIdMetadata;
-    private msaOpenIdMetadata: oid.OpenIdMetadata;
+    private botConnectorOpenIdMetadata: OpenIdMetadata;
+    private msaOpenIdMetadata: OpenIdMetadata;
+    private emulatorOpenIdMetadata: OpenIdMetadata;
 
     constructor(private settings: IChatConnectorSettings = {}) {
         if (!this.settings.endpoint) {
             this.settings.endpoint = {
-                refreshEndpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-                refreshScope: 'https://graph.microsoft.com/.default',
-                botConnectorOpenIdMetadata: this.settings.openIdMetadata || 'https://api.aps.skype.com/v1/.well-known/openidconfiguration',
+                refreshEndpoint: 'https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token',
+                refreshScope: 'https://api.botframework.com/.default',
+                botConnectorOpenIdMetadata: this.settings.openIdMetadata || 'https://login.botframework.com/v1/.well-known/openidconfiguration',
                 botConnectorIssuer: 'https://api.botframework.com',
                 botConnectorAudience: this.settings.appId,
                 msaOpenIdMetadata: 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration',
                 msaIssuer: 'https://sts.windows.net/72f988bf-86f1-41af-91ab-2d7cd011db47/',
                 msaAudience: 'https://graph.microsoft.com',
+                emulatorOpenIdMetadata: 'https://login.microsoftonline.com/botframework.com/v2.0/.well-known/openid-configuration',
+                emulatorAudience: 'https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/',
+                emulatorIssuer: this.settings.appId,
                 stateEndpoint: this.settings.stateEndpoint || 'https://state.botframework.com'
             }
         }
 
-        this.botConnectorOpenIdMetadata = new oid.OpenIdMetadata(this.settings.endpoint.botConnectorOpenIdMetadata);
-        this.msaOpenIdMetadata = new oid.OpenIdMetadata(this.settings.endpoint.msaOpenIdMetadata);
+        this.botConnectorOpenIdMetadata = new OpenIdMetadata(this.settings.endpoint.botConnectorOpenIdMetadata);
+        this.msaOpenIdMetadata = new OpenIdMetadata(this.settings.endpoint.msaOpenIdMetadata);
+        this.emulatorOpenIdMetadata = new OpenIdMetadata(this.settings.endpoint.emulatorOpenIdMetadata);
     }
 
     public listen(): IWebMiddleware {
@@ -120,8 +133,9 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
     private verifyBotFramework(req: IWebRequest, res: IWebResponse): void {
         var token: string;
         var isEmulator = req.body['channelId'] === 'emulator';
-        if (req.headers && req.headers.hasOwnProperty('authorization')) {
-            var auth = req.headers['authorization'].trim().split(' ');;
+        var authHeaderValue = req.headers ? req.headers['authorization'] || req.headers['Authorization'] : null;
+        if (authHeaderValue) {
+            var auth = authHeaderValue.trim().split(' ');
             if (auth.length == 2 && auth[0].toLowerCase() == 'bearer') {
                 token = auth[1];
             }
@@ -133,7 +147,7 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
 
             let decoded = jwt.decode(token, { complete: true });
             var verifyOptions: jwt.VerifyOptions;
-            var openIdMetadata: oid.OpenIdMetadata;
+            var openIdMetadata: OpenIdMetadata;
 
             if (isEmulator && decoded.payload.iss == this.settings.endpoint.msaIssuer) {
                 // This token came from MSA, so check it via the emulator path
@@ -141,6 +155,14 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
                 verifyOptions = {
                     issuer: this.settings.endpoint.msaIssuer,
                     audience: this.settings.endpoint.msaAudience,
+                    clockTolerance: 300
+                };
+            } else if (isEmulator && decoded.payload.iss == this.settings.endpoint.emulatorIssuer) {
+                // This token came from the emulator, so check it via the emulator path
+                openIdMetadata = this.emulatorOpenIdMetadata;
+                verifyOptions = {
+                    issuer: this.settings.endpoint.emulatorIssuer,
+                    audience: this.settings.endpoint.emulatorAudience,
                     clockTolerance: 300
                 };
             } else {
@@ -151,6 +173,13 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
                     audience: this.settings.endpoint.botConnectorAudience,
                     clockTolerance: 300
                 };
+            }
+
+            if (isEmulator && decoded.payload.appid != this.settings.appId) {
+                logger.error('ChatConnector: receive - invalid token. Requested by unexpected app ID.');
+                res.status(403);
+                res.end();
+                return;
             }
 
             openIdMetadata.getKey(decoded.header.kid, key => {
@@ -209,7 +238,10 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
             // Issue request
             var options: request.Options = {
                 method: 'POST',
-                url: url.resolve(address.serviceUrl, '/v3/conversations'),
+                // We use urlJoin to concatenate urls. url.resolve should not be used here, 
+                // since it resolves urls as hrefs are resolved, which could result in losing
+                // the last fragment of the serviceUrl
+                url: urlJoin(address.serviceUrl, '/v3/conversations'),
                 body: {
                     bot: address.bot,
                     members: [address.user] 
@@ -245,7 +277,7 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
         }
     }
 
-    public getData(context: bs.IBotStorageContext, callback: (err: Error, data: IChatConnectorStorageData) => void): void {
+    public getData(context: IBotStorageContext, callback: (err: Error, data: IChatConnectorStorageData) => void): void {
         try {
             // Build list of read commands
             var root = this.getStoragePath(context.address);
@@ -317,7 +349,8 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
                 if (!err) {
                     callback(null, data);
                 } else {
-                    callback(err instanceof Error ? err : new Error(err.toString()), null);
+                    var m = err.toString();
+                    callback(err instanceof Error ? err : new Error(m), null);
                 }
             });
         } catch (e) {
@@ -325,7 +358,7 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
         }
     }
 
-    public saveData(context: bs.IBotStorageContext, data: IChatConnectorStorageData, callback?: (err: Error) => void): void {
+    public saveData(context: IBotStorageContext, data: IChatConnectorStorageData, callback?: (err: Error) => void): void {
         var list: any[] = [];
         function addWrite(field: string, botData: any, url: string) {
             var hashKey = field + 'Hash'; 
@@ -340,8 +373,7 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
             // Build list of write commands
             var root = this.getStoragePath(context.address);
             if (context.userId) {
-                if (context.persistUserData)
-                {
+                if (context.persistUserData) {
                     // Write userData
                     addWrite('userData', data.userData || {}, root + '/users/' + encodeURIComponent(context.userId));
                 }
@@ -399,14 +431,15 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
                     if (!err) {
                         callback(null);
                     } else {
-                        callback(err instanceof Error ? err : new Error(err.toString()));
+                        var m = err.toString();
+                        callback(err instanceof Error ? err : new Error(m));
                     }
                 }
             });
         } catch (e) {
             if (callback) {
                 var err = e instanceof Error ? e : new Error(e.toString());
-                err.code = consts.Errors.EBADMSG;
+                (<any>err).code = consts.Errors.EBADMSG;
                 callback(err);
             }
         }
@@ -451,13 +484,17 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
         // Issue request
         var options: request.Options = {
             method: 'POST',
-            url: url.resolve(address.serviceUrl, path),
+            // We use urlJoin to concatenate urls. url.resolve should not be used here, 
+            // since it resolves urls as hrefs are resolved, which could result in losing
+            // the last fragment of the serviceUrl
+            url: urlJoin(address.serviceUrl, path),
             body: msg,
             json: true
         };
         if (address.useAuth) {
             this.authenticatedRequest(options, (err, response, body) => cb(err));
         } else {
+            this.addUserAgent(options);
             request(options, (err, response, body) => {
                 if (!err && response.statusCode >= 400) {
                     var txt = "Request to '" + options.url + "' failed: [" + response.statusCode + "] " + response.statusMessage;
@@ -538,7 +575,16 @@ export class ChatConnector implements ub.IConnector, bs.IBotStorage {
         }
     }
 
+    private addUserAgent(options: request.Options) : void {
+        if (options.headers == null)
+        {
+            options.headers = {};
+        }
+        options.headers['User-Agent'] = USER_AGENT;
+    }
+
     private addAccessToken(options: request.Options, cb: (err: Error) => void): void {
+        this.addUserAgent(options);
         if (this.settings.appId && this.settings.appPassword) {
             this.getAccessToken((err, token) => {
                 if (!err && token) {
@@ -669,7 +715,7 @@ var toAddress = {
     'useAuth': 'useAuth'
 }
 
-interface IChatConnectorStorageData extends bs.IBotStorageData {
+interface IChatConnectorStorageData extends IBotStorageData {
     userDataHash?: string;
     conversationDataHash?: string;
     privateConversationDataHash?: string;

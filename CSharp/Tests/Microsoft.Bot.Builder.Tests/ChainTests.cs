@@ -128,7 +128,7 @@ namespace Microsoft.Bot.Builder.Tests
             {
                 var toBot = MakeTestMessage();
                 toBot.Text = Phrase;
-                
+
                 using (var scope = DialogModule.BeginLifetimeScope(container, toBot))
                 {
                     DialogModule_MakeRoot.Register(scope, MakeSelectQuery);
@@ -151,7 +151,7 @@ namespace Microsoft.Bot.Builder.Tests
             {
                 var toBot = MakeTestMessage();
                 toBot.Text = true.ToString();
-                
+
                 using (var scope = DialogModule.BeginLifetimeScope(container, toBot))
                 {
                     DialogModule_MakeRoot.Register(scope, () => query);
@@ -176,7 +176,7 @@ namespace Microsoft.Bot.Builder.Tests
             {
                 var toBot = MakeTestMessage();
                 toBot.Text = false.ToString();
-                
+
                 using (var scope = DialogModule.BeginLifetimeScope(container, toBot))
                 {
                     DialogModule_MakeRoot.Register(scope, () => query);
@@ -229,7 +229,7 @@ namespace Microsoft.Bot.Builder.Tests
         }
 
         [TestMethod]
-        public async Task Switch_Case()
+        public async Task Chain_Switch_Case()
         {
             var toBot = MakeTestMessage();
 
@@ -340,6 +340,31 @@ namespace Microsoft.Bot.Builder.Tests
         }
 
         [TestMethod]
+        public async Task Chain_Catch()
+        {
+            var test = Chain
+                .PostToChain()
+                .Select(m => m.Text)
+                .Where(a => false)
+                .Catch<string, OperationCanceledException>((antecedent, error) => Chain.Return("world"))
+                .PostToUser();
+
+            using (var container = Build(Options.ResolveDialogFromContainer))
+            {
+                var builder = new ContainerBuilder();
+                builder
+                    .RegisterInstance(test)
+                    .As<IDialog<object>>();
+                builder.Update(container);
+
+                await AssertScriptAsync(container,
+                    "hello",
+                    "world"
+                    );
+            }
+        }
+
+        [TestMethod]
         public async Task SampleChain_Quiz()
         {
             var quiz = Chain
@@ -372,6 +397,49 @@ namespace Microsoft.Bot.Builder.Tests
                     "question 3?",
                     "C",
                     "your answers were: A,B,C"
+                    );
+            }
+        }
+
+        [TestMethod]
+        public async Task SampleChain_While_Count()
+        {
+            var root =
+                Chain
+                .PostToChain()
+                .Select(_ => (IReadOnlyList<string>)Array.Empty<string>())
+                .While
+                (
+                    items => Chain
+                                .Return(items)
+                                .Select(i => i.Count < 3),
+                    items => Chain
+                                .Return(items)
+                                .Select(i => $"question {i.Count}")
+                                .PostToUser()
+                                .WaitToBot()
+                                .Select(a => items.Concat(new[] { a.Text }).ToArray())
+                )
+                .Select(items => string.Join(",", items))
+                .PostToUser();
+
+            using (var container = Build(Options.ResolveDialogFromContainer | Options.Reflection))
+            {
+                var builder = new ContainerBuilder();
+                builder
+                    .RegisterInstance(root)
+                    .As<IDialog<object>>();
+                builder.Update(container);
+
+                await AssertScriptAsync(container,
+                    "hello",
+                    "question 0",
+                    "A",
+                    "question 1",
+                    "B",
+                    "question 2",
+                    "C",
+                    "A,B,C"
                     );
             }
         }
@@ -474,6 +542,57 @@ namespace Microsoft.Bot.Builder.Tests
                     "to get to the other side",
                     "anything but chickens",
                     "why don't you like chicken jokes?"
+                    );
+            }
+        }
+
+        [TestMethod]
+        public async Task SampleChain_Waterfall()
+        {
+            var waterfall = Chain
+                .PostToChain()
+                .ContinueWith(async (context, res) =>
+                {
+                    var msg = await res;
+                    await context.PostAsync($"you said {msg.Text}");
+                    return Chain.From(() => new PromptDialog.PromptChoice<string>(new[] { "a", "b", "c" }, "Which one you want to select?", string.Empty, 1, PromptStyle.None));
+                })
+                .ContinueWith(async (context, res) =>
+                {
+                    var selection = await res;
+                    context.ConversationData.SetValue("selected", selection);
+                    return (IDialog<bool>)new PromptDialog.PromptConfirm($"do you want {selection}?", string.Empty, 1, PromptStyle.None);
+                })
+                .Then(async (context, res) =>
+                {
+
+                    var selection = context.ConversationData.Get<string>("selected");
+                    if (await res)
+                    {
+                        return $"{selection} is selected!";
+                    }
+                    else
+                    {
+                        return "selection canceled!";
+                    }
+                }).PostToUser();
+
+            using (var container = Build(Options.ResolveDialogFromContainer))
+            {
+                var builder = new ContainerBuilder();
+                builder
+                    .RegisterInstance(waterfall)
+                    .As<IDialog<object>>();
+                builder.Update(container);
+
+                await AssertScriptAsync(container,
+                    "test",
+                    "you said test",
+                    "Which one you want to select?",
+                    "a",
+                    "do you want a?",
+                    "yes",
+                    "a is selected!"
                     );
             }
         }
